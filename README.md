@@ -160,6 +160,7 @@ SELECT * FROM people ORDER BY dob DESC LIMIT 10;
 - without index
 
   raw data is sigltly faster because :
+
   people.dob is a DATE → slightly more CPU per row than VARCHAR (tiny difference).
   people_raw.dob is VARCHAR → sorting strings is slightly faster here because MySQL can do byte-wise comparisons instead of date computations.
 
@@ -173,7 +174,7 @@ SELECT * FROM people ORDER BY dob DESC LIMIT 10;
 Backup Table 2:
 
 ```bash
-mysqldump -u root -p mydatabase people > /backups/people_backup.sql
+mysqldump -u root -p perf_test people > /backups/people_backup.sql
 ```
 
 Automate weekly backup (Linux cron):
@@ -182,14 +183,16 @@ Create a script
 
 ```bash
 
-sudo vim /usr/local/bin/backup_people.sh:
+sudo vim /usr/local/bin/backup_people.sh
 ```
 
 ```bash
 #!/bin/bash
 DATE=$(date +%F)
-mysqldump -u root -pYourPassword mydatabase people > /backups/people_$DATE.sql
+mysqldump -u root -pYourPassword perf_test people > /backups/people_$DATE.sql
 ```
+
+![Backup](images/backup.png)
 
 ```bash
 # Make it executable:
@@ -197,10 +200,12 @@ chmod +x /usr/local/bin/backup_people.sh
 # Add cron job:
 crontab -e
 # Add:
-0 2 \* \* 0 /usr/local/bin/backup_people.sh
+0 2 * * 0 /usr/local/bin/backup_people.sh
 ```
 
 This runs every Sunday at 2 AM.
+
+![crontab](images/crontab.png)
 
 # Step 5: Restore Test
 
@@ -211,7 +216,7 @@ CREATE TABLE people_restore LIKE people;
 -- Restore backup
 
 ```bash
-mysql -u root -p mydatabase < /backups/people_backup.sql
+mysql -u root -p perf_test < /backups/people_backup.sql
 ```
 
 Check data:
@@ -220,3 +225,144 @@ Check data:
 SELECT COUNT(*) FROM people_restore;
 SELECT * FROM people_restore LIMIT 10;
 ```
+
+Before restore:
+
+![Before Restore](images/before_restore.png)
+
+After Restore:
+
+![After Restore](/images/after_restore.png)
+
+![After Restore](images/after_restore2.png)
+
+# Step 6: Extract data from MySQL (Python, JDBC, or CSV export)
+
+```sql
+
+```
+
+# Step 7: Install clickhouse and Load the same data into it
+
+---
+
+1️⃣ Install the ClickHouse
+
+```bash
+sudo yum install -y yum-utils
+sudo yum-config-manager --add-repo https://packages.clickhouse.com/rpm/clickhouse.repo
+```
+
+2️⃣ Install ClickHouse server + client
+
+```bash
+sudo yum install -y clickhouse-server clickhouse-client
+```
+
+3️⃣ Start the Service
+
+```bash
+sudo systemctl enable clickhouse-server
+sudo systemctl start clickhouse-server
+```
+
+Check status:
+
+```bash
+sudo systemctl status clickhouse-server
+```
+
+4️⃣ Connect to ClickHouse
+
+```bash
+clickhouse-client
+```
+
+# Step 8: Create the table in ClickHouse
+
+ClickHouse is columnar (OLAP-friendly), so types differ slightly:
+
+```sql
+CREATE TABLE people_ch (
+    user_id String,
+    username String,
+    sex Enum8('Male'=1, 'Female'=2),
+    email String,
+    phone String,
+    dob Date,
+    job_title String
+) ENGINE = MergeTree()
+ORDER BY user_id;
+```
+
+# Step 9: Extract data from MySQL
+
+in side sql server
+
+```sql
+     SELECT user_id, username, sex, email, phone, dob, job_title
+    -> INTO OUTFILE '/var/lib/mysql-files/people_clickhouse.csv'
+    -> FIELDS TERMINATED BY ','
+    -> OPTIONALLY ENCLOSED BY '"'
+    -> LINES TERMINATED BY '\n'
+    -> FROM people;
+```
+
+# Step 10: Load data into ClickHouse
+
+```bash
+ sudo cat /var/lib/mysql-files/people_clickhouse.csv \
+    | sudo clickhouse-client --query="INSERT INTO people_ch FORMAT CSV"
+```
+
+# Step 11: Run analytical queries in ClickHouse
+
+a) Count total users
+
+```sql
+SELECT COUNT(*) FROM people_ch;
+```
+
+b) Count by sex
+
+```sql
+SELECT sex, COUNT(*) FROM people_ch GROUP BY sex;
+```
+
+![count](images/ch_count.png)
+
+c) Filter WHERE sex='Female'
+
+```sql
+SELECT * FROM people_ch WHERE sex='Female';
+```
+
+![where](images/ch_where.png)
+
+d) AVG age
+
+```sql
+SELECT sex, AVG(toYear(now()) - toYear(dob)) AS avg_age
+FROM people_ch
+GROUP BY sex;
+```
+
+![Groupby](images/ch_groupby.png)
+
+e) Sorting dob DESC with LIMIT
+
+```sql
+SELECT * FROM people_ch ORDER BY dob DESC LIMIT 10;
+```
+
+![Sort](images/ch_sort.png)
+
+# Final Performance Comparison Table — MySQL vs ClickHouse
+
+| Query                             | MySQL Time (sec)                                | ClickHouse Time (sec) | Winner                      | Reason                                                               |
+| --------------------------------- | ----------------------------------------------- | --------------------- | --------------------------- | -------------------------------------------------------------------- |
+| **a) COUNT total users**          | **0.20 s**                                      | **0.145 s**           | **ClickHouse**              | Columnar storage + vectorized execution → faster full scans.         |
+| **b) COUNT by sex**               | **0.38 s**                                      | **0.076 s**           | **ClickHouse**              | GROUP BY is heavily optimized in ClickHouse.                         |
+| **c) WHERE sex='Female'**         | **2.53 s**                                      | **1.154 s**           | **ClickHouse**              | Columnar filtering avoids reading unnecessary columns.               |
+| **d) AVG age**                    | **5.01 s**                                      | **0.249 s**           | **ClickHouse (20× faster)** | CPU-heavy aggregation extremely fast in OLAP engines.                |
+| **e) ORDER BY dob DESC LIMIT 10** | **1.51 s (no index)** / **0.02 s (with index)** | **0.587 s**           | **MySQL (with index)**      | Index lookup is O(log n), faster than CH full sort for small limits. |
