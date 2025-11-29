@@ -366,3 +366,96 @@ SELECT * FROM people_ch ORDER BY dob DESC LIMIT 10;
 | **c) WHERE sex='Female'**         | **2.53 s**                                      | **1.154 s**           | **ClickHouse**              | Columnar filtering avoids reading unnecessary columns.               |
 | **d) AVG age**                    | **5.01 s**                                      | **0.249 s**           | **ClickHouse (20× faster)** | CPU-heavy aggregation extremely fast in OLAP engines.                |
 | **e) ORDER BY dob DESC LIMIT 10** | **1.51 s (no index)** / **0.02 s (with index)** | **0.587 s**           | **MySQL (with index)**      | Index lookup is O(log n), faster than CH full sort for small limits. |
+
+---
+
+# Mongodb Tasks
+
+1. install mongodb
+
+```bash
+sudo vi /etc/yum.repos.d/mongodb-org-7.0.repo
+
+# Paste the following content:
+
+[mongodb-org-7.0]
+name=MongoDB Repository
+baseurl=https://repo.mongodb.org/yum/redhat/$releasever/mongodb-org/7.0/x86_64/
+gpgcheck=1
+enabled=1
+gpgkey=https://www.mongodb.org/static/pgp/server-7.0.asc
+
+# Install MongoDB
+
+sudo yum install -y mongodb-org
+
+# Start and enable MongoDB service
+
+sudo systemctl start mongod
+sudo systemctl enable mongod
+
+# Connect to MongoDB shell
+mongosh
+```
+
+2. Create a new MongoDB database
+
+```sql
+use people_db
+
+```
+
+3. Insert dummy data in shell not in mongosh
+
+```bash
+
+sudo mongoimport \
+  --db people_db \
+  --collection people \
+  --type csv \
+  --file /var/lib/mysql-files/people_clickhouse.csv \
+  --fields user_id,username,sex,email,phone,dob,job_title
+
+```
+
+![Import](images/import_mongo.png)
+
+4. Create an index on one or more fields
+
+```bash
+db.people.createIndex({ sex: 1 })
+
+db.people.createIndex({ dob: 1 })
+
+#  Verify indexes
+db.people.getIndexes()
+```
+
+![index](images/index_mongo.png)
+
+5. Take a backup of the MongoDB collection
+
+```bash
+sudo mongodump \
+  --db people_db \
+  --collection people \
+  --out /backups/mongo/
+```
+
+![Backup](images/mongo_backup.png)
+
+6. Restore it into a new collection
+
+```bash
+sudo mongorestore \
+  --db people_db \
+  --collection people_restore \
+  /backups/mongo/people_db/people.bson
+
+```
+
+![Restore](images/restore_mongo.png)
+
+Verify restored table
+
+![Verify](images/verfiy_mongo.png)
