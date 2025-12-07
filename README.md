@@ -236,11 +236,7 @@ After Restore:
 
 ![After Restore](images/after_restore2.png)
 
-# Step 6: Extract data from MySQL (Python, JDBC, or CSV export)
-
-```sql
-
-```
+# Extract data from MySQL (Python, JDBC, or CSV export)
 
 # Step 7: Install clickhouse and Load the same data into it
 
